@@ -132,15 +132,17 @@ if 'page' not in st.session_state:
     st.session_state.page = 'intro'
 
 if st.session_state.page == 'intro':
-    # Add Logo to Streamlit Page Body
+    # Use columns to place the icon and title on the same line
     try:
-        st.image("Uppseekers Logo.png", width=200)
+        col1, col2 = st.columns([0.2, 0.8])
+        with col1:
+            st.image("Uppseekers Logo.png", width=100) # Adjust width for desired size
+        with col2:
+            st.title("Uppseekers Admit AI")
     except Exception:
         st.error("Logo file not found. Please ensure 'Uppseekers Logo.png' is in the correct folder.")
         st.stop()
-
-    st.title("Uppseekers Admit AI")
-
+        
     name = st.text_input("Student Name")
     student_class = st.selectbox("Student Class", ["9", "10", "11", "12"])
     board = st.selectbox("Board of Education", ["IB", "IGCSE", "CIE", "ICSE", "CBSE", "State Board", "Others"])
@@ -161,7 +163,6 @@ if st.session_state.page == 'intro':
             st.session_state.selected_course = selected_course
             st.session_state.sheet_map = sheet_map
             st.rerun()
-
 elif st.session_state.page == 'questions':
     name = st.session_state.name
     student_class = st.session_state.student_class
