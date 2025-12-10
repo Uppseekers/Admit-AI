@@ -1,485 +1,282 @@
-import streamlit as st
 import pandas as pd
-import io
-# Removed matplotlib and numpy imports to prevent ModuleNotFoundError
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.graphics.shapes import Drawing, Rect, String, Line # Import ReportLab graphics
-from datetime import datetime
+import os
+import sys
 
-# ─────────────────────────────────────────────
-# CONFIG & STYLING
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="Uppseekers Admit AI",
-    page_icon="🎓", 
-    layout="centered"
-)
+# --- Configuration ---
+# File names correspond to the CSVs generated from your original Excel sheets.
+# The structure of the code is designed to load all sheets dynamically.
 
-# Brand Colors
-BRAND_COLOR = colors.Color(0.1, 0.2, 0.5) # Navy Blue
-ACCENT_COLOR = colors.Color(1, 0.6, 0.2)  # Gold/Orange
-LIGHT_GREY = colors.Color(0.95, 0.95, 0.95)
+# Base file names for the two source files
+READY_FILE = "University Readiness_new (1).xlsx"
+BENCHMARK_FILE = "Benchmarking_USA.xlsx"
 
-# ─────────────────────────────────────────────
-# MOCK DATA GENERATORS (FALLBACK)
-# ─────────────────────────────────────────────
-def get_mock_questions():
-    """Generates dummy data if Excel is missing so you can see the PDF design"""
-    data = {
-        'question_id': [1, 2, 3, 4],
-        'question_text': [
-            "What is your current GPA range?",
-            "How many extracurricular activities do you lead?",
-            "Have you taken SAT/ACT?",
-            "Rate your essay writing skills."
-        ],
-        'option_A': ["< 3.0", "None", "No", "Basic"],
-        'option_B': ["3.0 - 3.5", "1-2", "Planned", "Average"],
-        'option_C': ["3.5 - 3.8", "3-4", "Yes, low score", "Good"],
-        'option_D': ["3.8 - 4.0", "5+", "Yes, high score", "Excellent"],
-        'option_E': [None, None, None, None],
-        'score_A': [5, 5, 0, 5],
-        'score_B': [10, 10, 5, 10],
-        'score_C': [15, 15, 10, 15],
-        'score_D': [20, 20, 20, 20],
-        'score_E': [0, 0, 0, 0]
-    }
-    return pd.DataFrame(data)
+# Mapping sheet names (which should now be CSV files)
+COURSE_TO_QUESTION_MAP_FILE = f"{READY_FILE} - Sheet1.csv"
+COURSE_TO_BENCHMARK_MAP_FILE = f"{BENCHMARK_FILE} - Sheet1.csv"
 
-def get_mock_benchmarks():
-    """Generates dummy university data"""
-    data = {
-        'University': ['Harvard', 'Stanford', 'MIT', 'UCLA', 'NYU', 'Boston U', 'Purdue'],
-        'Q1': [20, 19, 20, 18, 16, 14, 12], # Raw scores to be scaled
-        'Q2': [10, 10, 10, 8, 8, 6, 6],
-        'Q3': [10, 10, 10, 8, 8, 6, 6]
-    }
-    # Create enough columns to mimic real sheet
-    df = pd.DataFrame(data)
-    for i in range(4, 11):
-        df[f'Q{i}'] = 8
-    return df
+# --- Utility Functions ---
 
-# ─────────────────────────────────────────────
-# LOAD DATA FUNCTIONS
-# ─────────────────────────────────────────────
 def load_data():
-    try:
-        xls = pd.ExcelFile("University Readiness_new.xlsx")
-        index_df = xls.parse(xls.sheet_names[0])
-        sheet_map = dict(zip(index_df['course'], index_df['next_questions_set']))
-        return xls, sheet_map
-    except FileNotFoundError:
-        # RETURN MOCK DATA FOR DEMO
-        # st.warning("⚠️ Excel file not found. Using Mock Data.")
-        mock_map = {"Computer Science": "Sheet1", "Economics": "Sheet1"}
-        return None, mock_map
-
-def load_benchmarking():
-    try:
-        bxls = pd.ExcelFile("Benchmarking_USA.xlsx")
-        index_df = bxls.parse(bxls.sheet_names[0])
-        sheet_map = dict(zip(index_df['course'], index_df['benchmarking_set']))
-        return bxls, sheet_map
-    except FileNotFoundError:
-        mock_map = {"Computer Science": "Sheet1", "Economics": "Sheet1"}
-        return None, mock_map
-
-# ─────────────────────────────────────────────
-# ADVANCED PDF GENERATION
-# ─────────────────────────────────────────────
-def create_header_footer(canvas, doc):
-    """Draws the persistent header and footer on every page"""
-    canvas.saveState()
-    
-    # --- HEADER ---
-    # Draw a colored band at the top
-    canvas.setFillColor(BRAND_COLOR)
-    canvas.rect(0, A4[1] - 50, A4[0], 50, fill=True, stroke=False)
-    
-    # Text in Header
-    canvas.setFillColor(colors.white)
-    canvas.setFont("Helvetica-Bold", 16)
-    canvas.drawString(30, A4[1] - 32, "Uppseekers Admit AI")
-    
-    canvas.setFont("Helvetica", 10)
-    canvas.drawRightString(A4[0] - 30, A4[1] - 32, f"Report Generated: {datetime.now().strftime('%Y-%m-%d')}")
-
-    # --- FOOTER ---
-    canvas.setStrokeColor(colors.lightgrey)
-    canvas.line(30, 50, A4[0]-30, 50)
-    
-    canvas.setFillColor(colors.grey)
-    canvas.setFont("Helvetica", 9)
-    canvas.drawString(30, 35, "Confidential Advisory Report")
-    canvas.drawRightString(A4[0] - 30, 35, f"Page {doc.page}")
-    
-    canvas.restoreState()
-
-def generate_gap_chart(df, student_score):
     """
-    Creates a Vector Graphic chart using ReportLab primitives
-    Does NOT require matplotlib or numpy
+    Loads all required data (question sets, benchmark sets, and mappings)
+    from the provided CSV files into DataFrames.
     """
-    # Prepare Data
-    df = df.head(7).copy()
-    universities = df['University'].tolist()
-    uni_scores = df['Total Benchmark Score'].tolist()
-    
-    # Drawing Configuration
-    width = 450
-    height = 200
-    d = Drawing(width, height)
-    
-    bar_height = 15
-    spacing = 25
-    max_possible_score = 100
-    chart_width = 300
-    scale = chart_width / max_possible_score
-    
-    start_x = 100
-    start_y = height - 30
-    
-    # Chart Title (Manual Label)
-    # d.add(String(width/2, height-10, "Gap Analysis", textAnchor='middle', fontName="Helvetica-Bold"))
+    print("Loading data files...")
+    data = {}
+    try:
+        # 1. Load Course Mappings
+        course_q_map_df = pd.read_csv(COURSE_TO_QUESTION_MAP_FILE)
+        data['course_q_map'] = course_q_map_df.set_index('course').to_dict()['next_questions_set']
 
-    for i, (uni, score) in enumerate(zip(universities, uni_scores)):
-        y_pos = start_y - (i * spacing)
+        course_b_map_df = pd.read_csv(COURSE_TO_BENCHMARK_MAP_FILE)
+        data['course_b_map'] = course_b_map_df.set_index('course').to_dict()['benchmarking_set']
+
+        # 2. Dynamically Load Question Sets
+        data['question_sets'] = {}
+        for course, sheet_name in data['course_q_map'].items():
+            file_name = f"{READY_FILE} - {sheet_name}.csv"
+            data['question_sets'][course] = pd.read_csv(file_name)
         
-        # 1. University Label
-        d.add(String(5, y_pos + 4, uni, fontName="Helvetica", fontSize=10, textAnchor='start'))
+        # 3. Dynamically Load Benchmark Sets
+        data['benchmark_sets'] = {}
+        for course, sheet_name in data['course_b_map'].items():
+            file_name = f"{BENCHMARK_FILE} - {sheet_name}.csv"
+            data['benchmark_sets'][course] = pd.read_csv(file_name)
+
+        print("Data loaded successfully.")
+
+    except FileNotFoundError as e:
+        print(f"\nFATAL ERROR: Required data file not found: {e.filename}")
+        print("Please ensure all required CSV files are in the same directory as this script.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nAn unexpected error occurred during data loading: {e}")
+        sys.exit(1)
         
-        # 2. Determine Color based on Gap
-        gap = student_score - score
-        if gap >= -10:
-            bar_color = colors.HexColor('#2ecc71') # Green
-        elif gap >= -25:
-            bar_color = colors.HexColor('#f1c40f') # Yellow
-        else:
-            bar_color = colors.HexColor('#e74c3c') # Red
-            
-        # 3. Draw Bar
-        bar_len = score * scale
-        d.add(Rect(start_x, y_pos, bar_len, bar_height, fillColor=bar_color, strokeColor=None))
-        
-        # 4. Score Label
-        d.add(String(start_x + bar_len + 5, y_pos + 4, f"{int(score)}", fontName="Helvetica", fontSize=8, fillColor=colors.grey))
+    return data
 
-    # 5. Student Score Line
-    student_x = start_x + (student_score * scale)
-    line_top = start_y + 10
-    line_bottom = start_y - (len(universities) * spacing) + 10
-    
-    d.add(Line(student_x, line_top, student_x, line_bottom, strokeColor=colors.Color(0.1, 0.2, 0.5), strokeWidth=2, strokeDashArray=[2,2]))
-    d.add(String(student_x, line_top + 5, "You", fontName="Helvetica-Bold", fontSize=8, textAnchor='middle', fillColor=colors.Color(0.1, 0.2, 0.5)))
-    
-    return d
-
-def generate_pdf_pro(name, student_class, selected_course, total_score, response_summary, benchmark_df):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=70, bottomMargin=70)
-    
-    styles = getSampleStyleSheet()
-    
-    # Custom Styles
-    title_style = ParagraphStyle(
-        'MainTitle', 
-        parent=styles['Heading1'], 
-        fontSize=24, 
-        textColor=BRAND_COLOR, 
-        spaceAfter=20
-    )
-    subtitle_style = ParagraphStyle(
-        'SubTitle', 
-        parent=styles['Normal'], 
-        fontSize=12, 
-        textColor=colors.grey
-    )
-    h2_style = ParagraphStyle(
-        'H2Custom', 
-        parent=styles['Heading2'], 
-        fontSize=16, 
-        textColor=BRAND_COLOR, 
-        borderPadding=5, 
-        borderColor=colors.lightgrey, 
-        borderWidth=0, 
-        backColor=colors.whitesmoke, 
-        spaceBefore=20, 
-        spaceAfter=10
-    )
-    
-    elements = []
-
-    # 1. EXECUTIVE SUMMARY BOX
-    elements.append(Paragraph(f"Admissions Readiness Report", title_style))
-    
-    summary_data = [
-        [Paragraph("<b>Student Name:</b>", styles['Normal']), name],
-        [Paragraph("<b>Class:</b>", styles['Normal']), student_class],
-        [Paragraph("<b>Target Major:</b>", styles['Normal']), selected_course],
-        [Paragraph("<b>Readiness Score:</b>", styles['Normal']), f"{total_score} / 100"]
-    ]
-    
-    t_summ = Table(summary_data, colWidths=[2*inch, 4*inch])
-    
-    # Define style list explicitly to avoid syntax errors with nested brackets
-    summ_style_cmds = [
-        ('BACKGROUND', (0,0), (-1,-1), colors.aliceblue),
-        ('TEXTCOLOR', (0,0), (0,-1), BRAND_COLOR),
-        ('GRID', (0,0), (-1,-1), 1, colors.white),
-        ('PADDING', (0,0), (-1,-1), 10),
-    ]
-    t_summ.setStyle(TableStyle(summ_style_cmds))
-    
-    elements.append(t_summ)
-    elements.append(Spacer(1, 25))
-
-    # 2. VISUAL GAP ANALYSIS (CHART)
-    if not benchmark_df.empty:
-        elements.append(Paragraph("University Fit Visualization", h2_style))
-        elements.append(Paragraph("This chart compares your current profile score against the benchmark requirements for your target universities.", styles['Normal']))
-        elements.append(Spacer(1, 10))
-        
-        # Generate chart (now returns a Drawing object, not an image buffer)
-        chart_drawing = generate_gap_chart(benchmark_df, total_score)
-        elements.append(chart_drawing)
-        elements.append(Spacer(1, 20))
-
-    # 3. DETAILED UNIVERSITY TABLE
-    elements.append(Paragraph("Detailed University Breakdown", h2_style))
-    
-    if not benchmark_df.empty:
-        table_data = [["University", "Required Score", "Your Gap", "Status"]]
-        
-        sorted_df = benchmark_df.sort_values(by="Score Gap %", ascending=False).head(10)
-        
-        for _, row in sorted_df.iterrows():
-            gap = row['Score Gap %']
-            status = "✅ Reachable" if gap >= -10 else ("🟡 Moderate" if gap >= -25 else "🔴 High Reach")
-            status_color = colors.green if gap >= -10 else (colors.orange if gap >= -25 else colors.red)
-            
-            # For PDF styling of text color
-            row_data = [
-                row["University"],
-                f"{row['Total Benchmark Score']:.1f}",
-                f"{gap:.1f}%",
-                Paragraph(f"<font color={status_color}>{status}</font>", styles['Normal'])
-            ]
-            table_data.append(row_data)
-
-        uni_table = Table(table_data, colWidths=[2.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
-        
-        uni_style_cmds = [
-            ('BACKGROUND', (0, 0), (-1, 0), BRAND_COLOR),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('ALIGN', (0, 1), (0, -1), 'LEFT'), # Align Uni names left
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-        ]
-        uni_table.setStyle(TableStyle(uni_style_cmds))
-        
-        elements.append(uni_table)
-        elements.append(PageBreak())
-
-    # 4. PROFILE RESPONSES (Page 2)
-    elements.append(Paragraph("Profile Assessment Details", h2_style))
-    
-    resp_data = [["Question", "Your Answer", "Pts"]]
-    for q, ans, sc in response_summary:
-        # Wrap long text
-        resp_data.append([Paragraph(q, styles['Normal']), Paragraph(ans, styles['Normal']), str(sc)])
-        
-    resp_table = Table(resp_data, colWidths=[3.5*inch, 2.5*inch, 1*inch])
-    
-    resp_style_cmds = [
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-        ('BOX', (0, 0), (-1, -1), 1, colors.black),
-    ]
-    resp_table.setStyle(TableStyle(resp_style_cmds))
-    
-    elements.append(resp_table)
-
-    # BUILD PDF
-    doc.build(elements, onFirstPage=create_header_footer, onLaterPages=create_header_footer)
-    buffer.seek(0)
-    return buffer
-
-# ─────────────────────────────────────────────
-# APP LOGIC
-# ─────────────────────────────────────────────
-
-# Initialize Session State
-if 'page' not in st.session_state:
-    st.session_state.page = 'intro'
-
-# --- PAGE 1: INTRO ---
-if st.session_state.page == 'intro':
-    col1, col2 = st.columns([0.2, 0.8])
-    with col1:
-        # Check if logo exists, else use emoji
-        try:
-            st.image("Uppseekers Logo.png", width=100)
-        except:
-            st.write("🎓")
-    with col2:
-        st.title("Uppseekers Admit AI")
-        st.caption("AI-Powered University Readiness Assessment")
-
-    with st.container(border=True):
-        name = st.text_input("Student Name")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            student_class = st.selectbox("Student Class", ["9", "10", "11", "12"])
-            school_name = st.text_input("School Name")
-        with col_b:
-            board = st.selectbox("Board", ["IB", "IGCSE", "CBSE", "ICSE", "State", "Others"])
-            city = st.text_input("City")
-
-        xls, sheet_map = load_data()
-        selected_course = st.selectbox("Intended Major", list(sheet_map.keys()))
-
-    if st.button("Start Assessment", type="primary"):
-        if name and selected_course:
-            st.session_state.page = 'questions'
-            st.session_state.name = name
-            st.session_state.student_class = student_class
-            st.session_state.selected_course = selected_course
-            st.session_state.sheet_map = sheet_map
-            st.session_state.xls_obj = xls # Pass the file object or None
-            st.rerun()
-        else:
-            st.warning("Please enter Name and Course to proceed.")
-
-# --- PAGE 2: QUESTIONS ---
-elif st.session_state.page == 'questions':
-    name = st.session_state.name
-    selected_course = st.session_state.selected_course
-    xls = st.session_state.xls_obj
-    sheet_map = st.session_state.sheet_map
-
-    st.markdown(f"### 📝 Assessment: {selected_course}")
-    st.progress(0.5, text="Answering Profile Questions")
-
-    # Load Data (Real or Mock)
-    if xls:
-        sheet_name = sheet_map[selected_course]
-        questions_df = xls.parse(sheet_name)
-    else:
-        questions_df = get_mock_questions() # Fallback
-
+def get_user_scores(course, question_df):
+    """
+    Runs the interactive questionnaire for the selected course and collects scores.
+    """
+    user_scores = {}
     total_score = 0
-    response_summary = []
-
-    with st.form("quiz_form"):
-        for _, row in questions_df.iterrows():
-            st.markdown(f"**{row['question_text']}**")
-            
-            # Construct options dynamically
-            options = []
-            option_scores = {}
-            for opt in ['A', 'B', 'C', 'D', 'E']:
-                opt_val = row.get(f'option_{opt}')
-                if pd.notna(opt_val):
-                    options.append(opt_val)
-                    option_scores[opt_val] = row.get(f'score_{opt}', 0)
-            
-            selected = st.radio(f"Select answer for Q{row['question_id']}", options, index=None, key=f"q_{row['question_id']}")
-            
-            if selected:
-                score = option_scores.get(selected, 0)
-                total_score += score
-                response_summary.append((row['question_text'], selected, score))
-            else:
-                response_summary.append((row['question_text'], "Not Answered", 0))
-
-        submitted = st.form_submit_button("Calculate Score & Benchmarks")
+    max_score = 0
+    
+    # Identify score and option columns dynamically (e.g., score_A, option_A)
+    score_cols = [col for col in question_df.columns if col.startswith('score_')]
+    option_cols = [col.replace('score_', 'option_') for col in score_cols]
+    
+    print(f"\n--- University Readiness Questionnaire for {course} ---")
+    
+    for _, row in question_df.iterrows():
+        q_id = f"Q{row['question_id']}"
+        q_text = row['question_text']
         
-        if submitted:
-            st.session_state.total_score = total_score
-            st.session_state.response_summary = response_summary
+        # Calculate the maximum score for this question
+        current_q_max = max([row[s_col] for s_col in score_cols if pd.notna(row[s_col])], default=0)
+        max_score += current_q_max
+
+        print(f"\n{q_id}. {q_text}")
+        
+        options = {}
+        for i, (opt_col, scr_col) in enumerate(zip(option_cols, score_cols)):
+            option_text = row.get(opt_col)
+            score_value = row.get(scr_col)
             
-            # --- BENCHMARKING LOGIC ---
-            bxls, bsheet_map = load_benchmarking()
-            
-            if bxls:
-                # Real Data Logic
-                bsheet = bsheet_map.get(selected_course)
-                if bsheet:
-                    bench_df = bxls.parse(bsheet)
-                    # Normalize scores (assuming similar logic to your original code)
-                    bench_df["Q1_scaled"] = (bench_df["Q1"] / 20) * 40
-                    # Sum other columns dynamically
-                    other_cols = [c for c in bench_df.columns if c.startswith('Q') and c != 'Q1']
-                    bench_df["OtherTotal"] = bench_df[other_cols].sum(axis=1)
-                    bench_df["Other_scaled"] = (bench_df["OtherTotal"] / 80) * 60 # Approx scaling
-                    bench_df["Total Benchmark Score"] = (bench_df["Q1_scaled"] + bench_df["Other_scaled"]).round(2)
-                    bench_df["Score Gap %"] = ((total_score - bench_df["Total Benchmark Score"]) / bench_df["Total Benchmark Score"]) * 100
-                    st.session_state.benchmark_df = bench_df
+            # Stop if we hit a NaN option, assuming options are contiguous
+            if pd.isna(option_text) or pd.isna(score_value):
+                break
+                
+            key = str(i + 1)
+            options[key] = {'text': option_text, 'score': score_value}
+            print(f"  [{key}] {option_text} (Score: {score_value})")
+
+        while True:
+            choice = input("Enter your choice number (e.g., 1): ")
+            if choice in options:
+                user_selected_score = options[choice]['score']
+                user_scores[q_id] = user_selected_score
+                total_score += user_selected_score
+                break
             else:
-                # Mock Data Logic
-                bench_df = get_mock_benchmarks()
-                bench_df["Total Benchmark Score"] = bench_df["Q1"] + bench_df["Q2"] + bench_df["Q3"] + 15 # Fake math
-                bench_df["Score Gap %"] = ((total_score - bench_df["Total Benchmark Score"]) / bench_df["Total Benchmark Score"]) * 100
-                st.session_state.benchmark_df = bench_df
-            
-            st.session_state.page = 'results'
-            st.rerun()
+                print("Invalid choice. Please enter the corresponding number.")
 
-# --- PAGE 3: RESULTS & DOWNLOAD ---
-elif st.session_state.page == 'results':
-    st.title("📊 Analysis Complete")
-    
-    score = st.session_state.total_score
-    
-    # Display Score visually
-    col1, col2, col3 = st.columns(3)
-    with col2:
-        st.metric(label="Your Readiness Score", value=f"{score}/100")
-    
-    st.divider()
-    
-    st.write("### 📥 Get Your Official Report")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        parent_name = st.text_input("Parent's Name")
-    with col_b:
-        whatsapp = st.text_input("WhatsApp Number (+91...)")
+    print("\n--- Questionnaire Complete ---")
+    return user_scores, total_score, max_score
 
-    if st.button("Generate Professional PDF"):
-        if parent_name and whatsapp:
-            # Generate the fancy PDF
-            pdf_data = generate_pdf_pro(
-                st.session_state.name,
-                st.session_state.student_class,
-                st.session_state.selected_course,
-                st.session_state.total_score,
-                st.session_state.response_summary,
-                st.session_state.benchmark_df
-            )
+def calculate_report(course, user_scores, user_total, max_score, benchmark_df):
+    """
+    Calculates the detailed comparison report against university benchmarks.
+    """
+    print(f"\n--- Generating Detailed Report for {course} Admissions Readiness ---")
+    
+    report_data = []
+    
+    # 1. Identify Q-columns in the benchmark data (Q1, Q2, Q3, etc.)
+    q_cols = [col for col in benchmark_df.columns if col.startswith('Q')]
+    
+    if not q_cols:
+        print("Error: Benchmark file does not contain 'Q' columns (Q1, Q2, etc.). Cannot generate detailed report.")
+        return
+
+    # 2. Calculate User's Overall Readiness Percentage
+    user_readiness_percent = (user_total / max_score) * 100 if max_score > 0 else 0
+    
+    # 3. Process each university
+    for _, university_row in benchmark_df.iterrows():
+        uni_name = university_row['University']
+        uni_total_benchmark = university_row['Total Benchmark Score']
+        
+        # Calculate University's Overall Readiness Percentage
+        # We must use the user's max_score (derived from the question set)
+        uni_readiness_percent = (uni_total_benchmark / max_score) * 100 if max_score > 0 else 0
+        
+        # Calculate Gap
+        score_gap = uni_total_benchmark - user_total
+        percent_gap = ((uni_total_benchmark - user_total) / uni_total_benchmark) * 100 if uni_total_benchmark > 0 else 100
+        
+        # Prepare detailed criterion breakdown
+        breakdown = {}
+        for q_id in q_cols:
+            user_q_score = user_scores.get(q_id, 0)
+            uni_q_benchmark = university_row.get(q_id, 0)
             
-            st.success("Report Generated Successfully!")
-            st.download_button(
-                label="📄 Download Uppseekers Report",
-                data=pdf_data,
-                file_name=f"{st.session_state.name}_Uppseekers_Report.pdf",
-                mime="application/pdf"
-            )
-        else:
-            st.error("Please provide parent details to unlock the download.")
+            # Handle potential case where the benchmark sheet is missing a Q column
+            if pd.isna(uni_q_benchmark):
+                uni_q_benchmark = 0.0
+
+            breakdown[q_id] = {
+                'user_score': user_q_score,
+                'uni_benchmark': uni_q_benchmark,
+                'gap': uni_q_benchmark - user_q_score
+            }
             
-    st.divider()
-    if st.button("Start Over"):
-        st.session_state.clear()
-        st.rerun()
+        report_data.append({
+            'University': uni_name,
+            'User Score': user_total,
+            'Benchmark Score': uni_total_benchmark,
+            'User Readiness %': f"{user_readiness_percent:.1f}%",
+            'Benchmark Readiness %': f"{uni_readiness_percent:.1f}%",
+            'Score Gap (Abs)': score_gap,
+            'Gap %': f"{percent_gap:.1f}%",
+            'Criterion Breakdown': breakdown
+        })
+
+    # Sort the report by Score Gap (smallest gap first)
+    report_data.sort(key=lambda x: x['Score Gap (Abs)'])
+    
+    return report_data, user_readiness_percent, max_score
+
+def display_report(report_data, user_readiness_percent, max_score, course):
+    """
+    Displays the generated report in a readable format.
+    """
+    
+    print("\n" + "="*80)
+    print(f"| {'UPPSEEKERS ADMISSIONS READINESS REPORT':^76} |")
+    print(f"| {'Target Course: ' + course:^76} |")
+    print("="*80)
+    
+    print(f"\n[SUMMARY] User's Overall Readiness Score: {report_data[0]['User Score']:.1f} / {max_score:.1f} ({user_readiness_percent:.1f}%)")
+    
+    print("\n[UNIVERSITY BENCHMARK COMPARISON]")
+    
+    # Create a nice summary table
+    summary_table = []
+    
+    for item in report_data:
+        summary_table.append({
+            'University': item['University'],
+            'User %': item['User Readiness %'],
+            'Benchmark %': item['Benchmark Readiness %'],
+            'Gap %': item['Gap %']
+        })
+        
+    summary_df = pd.DataFrame(summary_table)
+    
+    # Highlight the best matches (smallest gaps)
+    print(summary_df.to_markdown(index=False))
+    
+    print("\n[TOP 3 DEVELOPMENT AREAS]")
+    
+    # 4. Generate Top 3 Development Areas (Focus on the university with the smallest positive gap or the top benchmark)
+    
+    # Get the top university by benchmark score
+    top_uni = max(report_data, key=lambda x: x['Benchmark Score'])
+    top_uni_breakdown = top_uni['Criterion Breakdown']
+    
+    # Calculate the gap for each criterion for the top university
+    gaps = []
+    for q_id, data in top_uni_breakdown.items():
+        if data['gap'] > 0:
+            gaps.append({
+                'criterion': q_id,
+                'gap': data['gap'],
+                'uni_score': data['uni_benchmark']
+            })
+            
+    # Sort by the largest positive gap (areas where the user needs most improvement relative to the top university)
+    gaps.sort(key=lambda x: x['gap'], reverse=True)
+    
+    if gaps:
+        for i, gap in enumerate(gaps[:3]):
+            # Find the actual question text for better context
+            question_row = question_sets[course].loc[question_sets[course]['question_id'] == int(gap['criterion'].replace('Q', ''))].iloc[0]
+            question_text = question_row['question_text']
+            
+            print(f"  {i+1}. {question_text} ({gap['criterion']})")
+            print(f"     Required Score (Top University): {gap['uni_score']:.1f}")
+            print(f"     Your Score: {user_scores[gap['criterion']]:.1f}")
+            print(f"     Score Gap: {gap['gap']:.1f}")
+            
+    print("\n" + "="*80)
+    print("This report is a guide. Contact an Uppseekers counselor for a personalized strategy.")
+    print("="*80 + "\n")
+
+
+def main():
+    """
+    Main execution function.
+    """
+    global question_sets # Needs to be global for use in display_report
+    
+    # 1. Load Data
+    data = load_data()
+    question_sets = data['question_sets']
+    benchmark_sets = data['benchmark_sets']
+    course_q_map = data['course_q_map']
+    
+    available_courses = list(course_q_map.keys())
+
+    # 2. Select Course
+    print("\nAvailable Courses:")
+    for i, course in enumerate(available_courses):
+        print(f"[{i+1}] {course}")
+        
+    while True:
+        try:
+            choice = input("Enter the number of your target course: ")
+            course_index = int(choice) - 1
+            if 0 <= course_index < len(available_courses):
+                selected_course = available_courses[course_index]
+                break
+            else:
+                print("Invalid number. Please try again.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            
+    # 3. Run Questionnaire
+    question_df = question_sets[selected_course]
+    user_scores, user_total, max_score = get_user_scores(selected_course, question_df)
+    
+    # 4. Calculate and Display Report
+    benchmark_df = benchmark_sets[selected_course]
+    report_data, user_readiness_percent, max_score = calculate_report(
+        selected_course, user_scores, user_total, max_score, benchmark_df
+    )
+    
+    display_report(report_data, user_readiness_percent, max_score, selected_course)
+
+if __name__ == "__main__":
+    main()
