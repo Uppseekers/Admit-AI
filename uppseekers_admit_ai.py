@@ -81,9 +81,8 @@ def generate_pdf_with_benchmark(name, student_class, selected_course, total_scor
     elements.append(table)
     elements.append(Spacer(1, 18))
 
-    def add_university_section(df, title, limit):
-        # Sort by Gap % (highest first for Safe, closest to zero for others)
-        df = df.sort_values(by="Score Gap %", ascending=False).head(limit)
+    def add_university_section(df, title):
+        df = df.sort_values(by="Score Gap %", ascending=False if "Reach" in title else True).head(5)
         if not df.empty:
             elements.append(Paragraph(title, styles['Heading3']))
             uni_table_data = [["University", "Benchmark Score", "Gap %"]]
@@ -102,15 +101,14 @@ def generate_pdf_with_benchmark(name, student_class, selected_course, total_scor
             elements.append(uni_table)
             elements.append(Spacer(1, 12))
 
-    # Updated logic per user request
-    safe = benchmark_df[benchmark_df["Score Gap %"] >= 0]
-    target = benchmark_df[(benchmark_df["Score Gap %"] <= -10) & (benchmark_df["Score Gap %"] >= -20)]
-    dream = benchmark_df[benchmark_df["Score Gap %"] < -20]
+    reach = benchmark_df[benchmark_df["Score Gap %"] >= -10]
+    maybe = benchmark_df[(benchmark_df["Score Gap %"] < -10) & (benchmark_df["Score Gap %"] >= -25)]
+    stretch = benchmark_df[benchmark_df["Score Gap %"] < -25]
 
     elements.append(Paragraph("University Fit Overview", styles['Heading2']))
-    add_university_section(safe, "🟢 Safe Universities (Top 5)", 5)
-    add_university_section(target, "🟡 Target Universities (Top 10)", 10)
-    add_university_section(dream, "🔴 Dream Universities (Top 5)", 5)
+    add_university_section(reach, "Within Reach Universities")
+    add_university_section(maybe, "Needs Strengthening")
+    add_university_section(stretch, "Significant Gaps")
 
     doc.build(elements)
     buffer.seek(0)
