@@ -81,8 +81,9 @@ def generate_pdf_with_benchmark(name, student_class, selected_course, total_scor
     elements.append(table)
     elements.append(Spacer(1, 18))
 
-    def add_university_section(df, title):
-        df = df.sort_values(by="Score Gap %", ascending=False if "Reach" in title else True).head(5)
+    def add_university_section(df, title, count):
+        # Sort by Gap % to show best fits first
+        df = df.sort_values(by="Score Gap %", ascending=True).head(count)
         if not df.empty:
             elements.append(Paragraph(title, styles['Heading3']))
             uni_table_data = [["University", "Benchmark Score", "Gap %"]]
@@ -101,14 +102,20 @@ def generate_pdf_with_benchmark(name, student_class, selected_course, total_scor
             elements.append(uni_table)
             elements.append(Spacer(1, 12))
 
-    reach = benchmark_df[benchmark_df["Score Gap %"] >= -10]
-    maybe = benchmark_df[(benchmark_df["Score Gap %"] < -10) & (benchmark_df["Score Gap %"] >= -25)]
-    stretch = benchmark_df[benchmark_df["Score Gap %"] < -25]
+    # FILTERING LOGIC PER REQUEST
+    # Safe: 0 or Negative Gap (Top 5)
+    safe_unis = benchmark_df[benchmark_df["Score Gap %"] <= 0]
+    
+    # Target: 10 to 20 positive Gap (Top 10)
+    target_unis = benchmark_df[(benchmark_df["Score Gap %"] >= 10) & (benchmark_df["Score Gap %"] <= 20)]
+    
+    # Dream: Above 20 positive Gap (Top 5)
+    dream_unis = benchmark_df[benchmark_df["Score Gap %"] > 20]
 
     elements.append(Paragraph("University Fit Overview", styles['Heading2']))
-    add_university_section(reach, "Within Reach Universities")
-    add_university_section(maybe, "Needs Strengthening")
-    add_university_section(stretch, "Significant Gaps")
+    add_university_section(safe_unis, "✅ Safe Universities", 5)
+    add_university_section(target_unis, "🟡 Target Universities", 10)
+    add_university_section(dream_unis, "🔴 Dream Universities", 5)
 
     doc.build(elements)
     buffer.seek(0)
@@ -184,6 +191,7 @@ elif st.session_state.page == 'questions':
         if bsheet and bsheet in bxls.sheet_names:
             bench_df = bxls.parse(bsheet)
             if "Total Benchmark Score" in bench_df.columns:
+                # RAW comparison logic: (Student Score - Univ Score) / Univ Score
                 bench_df["Score Gap %"] = ((total_score - bench_df["Total Benchmark Score"]) / bench_df["Total Benchmark Score"]) * 100
                 benchmark_df = bench_df
 
