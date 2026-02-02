@@ -2,42 +2,21 @@ import streamlit as st
 import pandas as pd
 import io
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
 
 # ─────────────────────────────────────────────
-# 1. UI/UX ENHANCEMENTS (Custom CSS)
+# CONFIG
 # ─────────────────────────────────────────────
-def apply_custom_css():
-    st.markdown("""
-        <style>
-        .main { background-color: #f8f9fa; }
-        .stButton>button {
-            width: 100%;
-            border-radius: 10px;
-            height: 3em;
-            background-color: #004aad;
-            color: white;
-            font-weight: bold;
-            border: none;
-        }
-        .stButton>button:hover { background-color: #003580; border: none; }
-        .stSelectbox, .stTextInput { border-radius: 10px; }
-        h1 { color: #004aad; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-        .card {
-            background-color: white;
-            padding: 20px;
-            border-radius: 15px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Uppseekers Admit AI",
+    page_icon="Uppseekers Logo.png",
+    layout="centered"
+)
 
 # ─────────────────────────────────────────────
-# 2. DATA LOADING
+# LOAD DATA FUNCTIONS
 # ─────────────────────────────────────────────
 def load_data():
     try:
@@ -45,8 +24,8 @@ def load_data():
         index_df = xls.parse(xls.sheet_names[0])
         sheet_map = dict(zip(index_df['course'], index_df['next_questions_set']))
         return xls, sheet_map
-    except:
-        st.error("Error: Data file 'University Readiness_new.xlsx' not found.")
+    except FileNotFoundError:
+        st.error("Error: The data file 'University Readiness_new.xlsx' was not found.")
         st.stop()
 
 def load_benchmarking():
@@ -55,176 +34,190 @@ def load_benchmarking():
         index_df = bxls.parse(bxls.sheet_names[0])
         sheet_map = dict(zip(index_df['course'], index_df['benchmarking_set']))
         return bxls, sheet_map
-    except:
-        st.error("Error: Data file 'Benchmarking_USA.xlsx' not found.")
+    except FileNotFoundError:
+        st.error("Error: The data file 'Benchmarking_USA.xlsx' was not found.")
         st.stop()
 
 # ─────────────────────────────────────────────
-# 3. ENHANCED PDF GENERATION
+# PDF EXPORT FUNCTION
 # ─────────────────────────────────────────────
-def generate_pdf_with_benchmark(name, student_class, selected_course, total_score, response_summary, benchmark_df, counsellor):
+def generate_pdf_with_benchmark(name, student_class, selected_course, total_score, response_summary, benchmark_df):
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
-    
-    # Custom Styles
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Title'], textColor=colors.HexColor("#004aad"), fontSize=24, spaceAfter=20)
-    header_style = ParagraphStyle('HeaderStyle', parent=styles['Heading2'], textColor=colors.HexColor("#333333"), fontSize=14, spaceBefore=10)
-    
     elements = []
 
-    # Logo
     try:
-        img = Image("Uppseekers Logo.png", width=140, height=40)
+        logo_path = "Uppseekers Logo.png"
+        img = Image(logo_path, width=150, height=45)
         img.hAlign = 'LEFT'
         elements.append(img)
-    except: pass
+        elements.append(Spacer(1, 20))
+    except FileNotFoundError:
+        pass
 
-    elements.append(Paragraph("Admit AI: University Readiness Report", title_style))
+    elements.append(Paragraph(f"Uppseekers Admit AI Report for {name}", styles['Title']))
+    elements.append(Paragraph(f"Class: {student_class}", styles['Normal']))
+    elements.append(Paragraph(f"Interested Course: {selected_course}", styles['Normal']))
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph(f"Total Profile Score: {total_score}", styles['Heading2']))
+    elements.append(Spacer(1, 12))
+
+    table_data = [["Question", "Selected Option", "Score"]]
+    for q, ans, sc in response_summary:
+        table_data.append([Paragraph(q, styles['Normal']), Paragraph(ans, styles['Normal']), str(sc)])
     
-    # Student Info Box
-    info_data = [
-        [f"Student Name: {name}", f"Class: {student_class}"],
-        [f"Target Course: {selected_course}", f"Counsellor: {counsellor}"]
-    ]
-    info_table = Table(info_data, colWidths=[250, 250])
-    info_table.setStyle(TableStyle([
-        ('TEXTCOLOR', (0,0), (-1,-1), colors.grey),
-        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+    table = Table(table_data, colWidths=[250, 180, 50], repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
     ]))
-    elements.append(info_table)
-    elements.append(Spacer(1, 20))
+    elements.append(Paragraph("Profile Responses:", styles['Heading3']))
+    elements.append(table)
+    elements.append(Spacer(1, 18))
 
-    # Score Highlight
-    elements.append(Paragraph(f"Your Profile Strength Score: {round(total_score, 2)}", header_style))
-    elements.append(Spacer(1, 15))
-
-    # University Sections Logic
-    def add_styled_section(df, title, color_hex, limit):
+    def add_university_section(df, title, limit):
+        # Sort by Gap % (highest first for Safe, closest to zero for others)
+        df = df.sort_values(by="Score Gap %", ascending=False).head(limit)
         if not df.empty:
-            elements.append(Paragraph(title, ParagraphStyle('Section', parent=styles['Heading3'], textColor=colors.HexColor(color_hex), fontSize=14, spaceBefore=15)))
-            
-            u_data = [["University", "Benchmark", "Match/Gap %"]]
-            for _, row in df.sort_values(by="Score Gap %", ascending=False).head(limit).iterrows():
-                u_data.append([
-                    Paragraph(row["University"], styles['Normal']),
-                    str(round(row["Total Benchmark Score"], 1)),
-                    f"{'+' if row['Score Gap %'] > 0 else ''}{round(row['Score Gap %'], 1)}%"
+            elements.append(Paragraph(title, styles['Heading3']))
+            uni_table_data = [["University", "Benchmark Score", "Gap %"]]
+            for _, row in df.iterrows():
+                uni_table_data.append([
+                    row["University"],
+                    round(row["Total Benchmark Score"], 2),
+                    f"{round(row['Score Gap %'], 2)}%"
                 ])
-            
-            u_table = Table(u_data, colWidths=[300, 100, 100])
-            u_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(color_hex)),
+            uni_table = Table(uni_table_data, repeatRows=1)
+            uni_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('PADDING', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
             ]))
-            elements.append(u_table)
-            elements.append(Spacer(1, 10))
+            elements.append(uni_table)
+            elements.append(Spacer(1, 12))
 
-    # Buckets per your request
+    # Updated logic per user request
     safe = benchmark_df[benchmark_df["Score Gap %"] >= 0]
     target = benchmark_df[(benchmark_df["Score Gap %"] <= -10) & (benchmark_df["Score Gap %"] >= -20)]
     dream = benchmark_df[benchmark_df["Score Gap %"] < -20]
 
-    add_styled_section(safe, "🟢 SAFE UNIVERSITIES (Top 5)", "#28a745", 5)
-    add_styled_section(target, "🟡 TARGET UNIVERSITIES (Top 10)", "#ffc107", 10)
-    add_styled_section(dream, "🔴 DREAM UNIVERSITIES (Top 5)", "#dc3545", 5)
+    elements.append(Paragraph("University Fit Overview", styles['Heading2']))
+    add_university_section(safe, "🟢 Safe Universities (Top 5)", 5)
+    add_university_section(target, "🟡 Target Universities (Top 10)", 10)
+    add_university_section(dream, "🔴 Dream Universities (Top 5)", 5)
 
     doc.build(elements)
     buffer.seek(0)
     return buffer
 
 # ─────────────────────────────────────────────
-# 4. APP FLOW
+# MULTI-PAGE STATE HANDLING
 # ─────────────────────────────────────────────
-apply_custom_css()
-
 if 'page' not in st.session_state:
     st.session_state.page = 'intro'
 
 if st.session_state.page == 'intro':
-    st.title("🚀 Uppseekers Admit AI")
-    st.markdown("##### *Data-driven insights for your global education journey.*")
-    
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        name = st.text_input("Student Name")
-        c1, c2 = st.columns(2)
-        with c1: student_class = st.selectbox("Current Class", ["9", "10", "11", "12"])
-        with c2: city = st.text_input("City")
+    try:
+        col1, col2 = st.columns([0.2, 0.8])
+        with col1:
+            st.image("Uppseekers Logo.png", width=100)
+        with col2:
+            st.title("Uppseekers Admit AI")
+    except Exception:
+        st.title("Uppseekers Admit AI")
         
-        xls, sheet_map = load_data()
-        selected_course = st.selectbox("Interested Undergrad Course", list(sheet_map.keys()))
-        
-        if st.button("Start My Assessment"):
-            if name:
-                st.session_state.update({"name": name, "student_class": student_class, "selected_course": selected_course, "sheet_map": sheet_map, "page": 'questions'})
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+    name = st.text_input("Student Name")
+    student_class = st.selectbox("Student Class", ["9", "10", "11", "12"])
+    board = st.selectbox("Board of Education", ["IB", "IGCSE", "CIE", "ICSE", "CBSE", "State Board", "Others"])
+    school_name = st.text_input("School Name")
+    city = st.selectbox("City", sorted(["Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur", "Lucknow", "Other"]))
+
+    xls, sheet_map = load_data()
+    selected_course = st.selectbox("Interested Course for Undergrad", list(sheet_map.keys()))
+
+    if st.button("Next"):
+        if name and student_class and selected_course:
+            st.session_state.page = 'questions'
+            st.session_state.name = name
+            st.session_state.student_class = student_class
+            st.session_state.selected_course = selected_course
+            st.session_state.sheet_map = sheet_map
+            st.rerun()
 
 elif st.session_state.page == 'questions':
+    selected_course = st.session_state.selected_course
+    sheet_map = st.session_state.sheet_map
+    sheet_name = sheet_map[selected_course]
     xls, _ = load_data()
-    course = st.session_state.selected_course
-    questions_df = xls.parse(st.session_state.sheet_map[course])
+    questions_df = xls.parse(sheet_name)
 
-    st.markdown(f"### 📋 Analyzing Profile for **{course}**")
-    
+    st.markdown(f"### Answer Questions for {selected_course}")
     total_score = 0
     response_summary = []
 
-    for idx, row in questions_df.iterrows():
-        with st.container():
-            st.markdown(f"**Q{int(row['question_id'])}. {row['question_text']}**")
-            opts = []
-            val_map = {}
-            for char in 'ABCDE':
-                opt_text = row.get(f'option_{char}')
-                if pd.notna(opt_text):
-                    label = f"{char}) {str(opt_text).strip()}"
-                    opts.append(label)
-                    val_map[label] = row.get(f'score_{char}', 0)
-            
-            selected = st.selectbox("Choose the most accurate option", ["Select..."] + opts, key=f"q{idx}")
-            if selected != "Select...":
-                score = val_map[selected]
-                total_score += score
-                response_summary.append((row['question_text'], selected, score))
-            st.divider()
-
-    if st.button("Generate My Results"):
-        if len(response_summary) < len(questions_df):
-            st.warning("Please complete all questions to see your final score.")
-        else:
-            bxls, bsheet_map = load_benchmarking()
-            bsheet = bsheet_map.get(course)
-            bench_df = bxls.parse(bsheet)
-            bench_df["Score Gap %"] = ((total_score - bench_df["Total Benchmark Score"]) / bench_df["Total Benchmark Score"]) * 100
-            
-            st.session_state.update({"total_score": total_score, "response_summary": response_summary, "benchmark_df": bench_df, "page": 'auth'})
-            st.rerun()
-
-elif st.session_state.page == 'auth':
-    st.title("🛡️ Counsellor Verification")
-    st.info("Assessment complete. A counsellor must verify this session to unlock the PDF report.")
-    
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        c_name = st.text_input("Counsellor Name *")
-        c_code = st.text_input("Authorization Code *", type="password")
+    for _, row in questions_df.iterrows():
+        st.markdown(f"**Q{int(row['question_id'])}. {row['question_text']}**")
+        options = []
+        option_map = {}
+        for opt in ['A', 'B', 'C', 'D', 'E']:
+            opt_text = row.get(f'option_{opt}')
+            if pd.notna(opt_text):
+                label = f"{opt}) {opt_text.strip()}"
+                options.append(label)
+                option_map[label] = row.get(f'score_{opt}')
         
-        if st.button("Unlock & Download Report"):
-            if c_code == "304" and c_name:
-                pdf = generate_pdf_with_benchmark(
-                    st.session_state.name, st.session_state.student_class, 
-                    st.session_state.selected_course, st.session_state.total_score, 
-                    st.session_state.response_summary, st.session_state.benchmark_df, c_name
-                )
-                st.success("Report Generated Successfully!")
-                st.download_button("📥 Download PDF Report", data=pdf, file_name=f"{st.session_state.name}_AdmitAI.pdf", mime="application/pdf")
-            else:
-                st.error("Invalid authorization code.")
-        st.markdown('</div>', unsafe_allow_html=True)
+        selected = st.selectbox("Select your answer", ["Select..."] + options, key=f"q{row['question_id']}")
+        if selected != "Select...":
+            score = option_map.get(selected, 0)
+            total_score += score
+            response_summary.append((row['question_text'], selected, score))
+
+    if st.button("Calculate Results"):
+        bxls, bsheet_map = load_benchmarking()
+        bsheet = bsheet_map.get(selected_course)
+        benchmark_df = pd.DataFrame()
+        
+        if bsheet and bsheet in bxls.sheet_names:
+            bench_df = bxls.parse(bsheet)
+            if "Total Benchmark Score" in bench_df.columns:
+                bench_df["Score Gap %"] = ((total_score - bench_df["Total Benchmark Score"]) / bench_df["Total Benchmark Score"]) * 100
+                benchmark_df = bench_df
+
+        st.session_state.total_score = total_score
+        st.session_state.response_summary = response_summary
+        st.session_state.benchmark_df = benchmark_df
+        st.session_state.page = 'counsellor_info'
+        st.rerun()
+
+elif st.session_state.page == 'counsellor_info':
+    st.title("🔒 Counsellor Authorization")
+    counsellor_name = st.text_input("Counsellor Name *")
+    counsellor_code = st.text_input("Counsellor Code *", type="password")
+
+    if st.button("Generate Report"):
+        if not counsellor_name or not counsellor_code:
+            st.error("Please fill in both required fields.")
+        elif counsellor_code == "304":
+            st.success("✅ Profile Analysis Complete!")
+            pdf_data = generate_pdf_with_benchmark(
+                st.session_state.name,
+                st.session_state.student_class,
+                st.session_state.selected_course,
+                st.session_state.total_score,
+                st.session_state.response_summary,
+                st.session_state.benchmark_df
+            )
+            st.download_button(
+                label="Download Your Report",
+                data=pdf_data,
+                file_name=f"{st.session_state.name}_AdmitAI_Report.pdf",
+                mime="application/pdf"
+            )
+        else:
+            st.error("Invalid Counsellor Code. Report generation locked.")
