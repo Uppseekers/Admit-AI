@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import io
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 
 # ─────────────────────────────────────────────
-# CONFIG
+# 1. APP CONFIGURATION
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="Uppseekers Admit AI",
@@ -16,205 +16,251 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# LOAD DATA FUNCTIONS
+# 2. DATA LOADING FUNCTIONS
 # ─────────────────────────────────────────────
+@st.cache_data
 def load_data():
     try:
         xls = pd.ExcelFile("University Readiness_new.xlsx")
+        # Assuming first sheet contains the mapping of course to question set
         index_df = xls.parse(xls.sheet_names[0])
         sheet_map = dict(zip(index_df['course'], index_df['next_questions_set']))
         return xls, sheet_map
-    except FileNotFoundError:
-        st.error("Error: The data file 'University Readiness_new.xlsx' was not found.")
+    except Exception as e:
+        st.error(f"Error loading 'University Readiness_new.xlsx': {e}")
         st.stop()
 
+@st.cache_data
 def load_benchmarking():
     try:
         bxls = pd.ExcelFile("Benchmarking_USA.xlsx")
+        # Assuming first sheet contains the mapping of course to benchmarking set
         index_df = bxls.parse(bxls.sheet_names[0])
         sheet_map = dict(zip(index_df['course'], index_df['benchmarking_set']))
         return bxls, sheet_map
-    except FileNotFoundError:
-        st.error("Error: The data file 'Benchmarking_USA.xlsx' was not found.")
+    except Exception as e:
+        st.error(f"Error loading 'Benchmarking_USA.xlsx': {e}")
         st.stop()
 
 # ─────────────────────────────────────────────
-# PDF EXPORT FUNCTION
+# 3. PDF GENERATION FUNCTION
 # ─────────────────────────────────────────────
-def generate_pdf_with_benchmark(name, student_class, selected_course, total_score, response_summary, benchmark_df):
+def generate_pdf_report(name, student_class, selected_course, total_score, response_summary, benchmark_df, counsellor_name):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
+    
+    # Custom styles for wrapping text in tables
+    style_normal = styles["Normal"]
+    style_heading = styles["Heading2"]
+    
     elements = []
 
+    # Add Logo
     try:
-        logo_path = "Uppseekers Logo.png"
-        img = Image(logo_path, width=150, height=45)
-        img.hAlign = 'LEFT'
-        elements.append(img)
-        elements.append(Spacer(1, 20))
-    except FileNotFoundError:
+        logo = Image("Uppseekers Logo.png", width=120, height=40)
+        logo.hAlign = 'LEFT'
+        elements.append(logo)
+        elements.append(Spacer(1, 15))
+    except:
         pass
 
-    elements.append(Paragraph(f"Uppseekers Admit AI Report for {name}", styles['Title']))
-    elements.append(Paragraph(f"Class: {student_class}", styles['Normal']))
-    elements.append(Paragraph(f"Interested Course: {selected_course}", styles['Normal']))
-    elements.append(Spacer(1, 12))
-    elements.append(Paragraph(f"Total Profile Score: {total_score}", styles['Heading2']))
+    # Header Details
+    elements.append(Paragraph(f"Admit AI Analysis Report", styles['Title']))
+    elements.append(Paragraph(f"<b>Student Name:</b> {name}", style_normal))
+    elements.append(Paragraph(f"<b>Class:</b> {student_class}", style_normal))
+    elements.append(Paragraph(f"<b>Target Course:</b> {selected_course}", style_normal))
+    elements.append(Paragraph(f"<b>Assisting Counsellor:</b> {counsellor_name}", style_normal))
+    elements.append(Spacer(1, 15))
+    
+    elements.append(Paragraph(f"Total Profile Score: {round(total_score, 2)}", style_heading))
     elements.append(Spacer(1, 12))
 
+    # Profile Response Table
     table_data = [["Question", "Selected Option", "Score"]]
     for q, ans, sc in response_summary:
-        table_data.append([Paragraph(q, styles['Normal']), Paragraph(ans, styles['Normal']), str(sc)])
+        # Wrap text using Paragraph for better fit
+        table_data.append([
+            Paragraph(q, style_normal),
+            Paragraph(ans, style_normal),
+            str(sc)
+        ])
     
-    table = Table(table_data, colWidths=[250, 180, 50], repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+    res_table = Table(table_data, colWidths=[240, 180, 50], repeatRows=1)
+    res_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#333333")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
     ]))
-    elements.append(Paragraph("Profile Responses:", styles['Heading3']))
-    elements.append(table)
-    elements.append(Spacer(1, 18))
+    elements.append(Paragraph("Detailed Profile Responses", styles['Heading3']))
+    elements.append(res_table)
+    elements.append(Spacer(1, 20))
 
-    def add_university_section(df, title):
-        df = df.sort_values(by="Score Gap %", ascending=False if "Reach" in title else True).head(5)
+    # University Fit Tables
+    def create_fit_section(df, title, header_color):
         if not df.empty:
             elements.append(Paragraph(title, styles['Heading3']))
-            uni_table_data = [["University", "Benchmark Score", "Gap %"]]
-            for _, row in df.iterrows():
-                uni_table_data.append([
-                    row["University"],
-                    round(row["Total Benchmark Score"], 2),
-                    f"{round(row['Score Gap %'], 2)}%"
+            u_data = [["University", "Benchmark", "Gap %"]]
+            for _, row in df.sort_values("Score Gap %", ascending=False).head(5).iterrows():
+                u_data.append([
+                    row["University"], 
+                    str(round(row["Total Benchmark Score"], 1)), 
+                    f"{round(row['Score Gap %'], 1)}%"
                 ])
-            uni_table = Table(uni_table_data, repeatRows=1)
-            uni_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            u_table = Table(u_data, colWidths=[280, 100, 90])
+            u_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), header_color),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+                ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
             ]))
-            elements.append(uni_table)
-            elements.append(Spacer(1, 12))
+            elements.append(u_table)
+            elements.append(Spacer(1, 15))
 
     reach = benchmark_df[benchmark_df["Score Gap %"] >= -10]
     maybe = benchmark_df[(benchmark_df["Score Gap %"] < -10) & (benchmark_df["Score Gap %"] >= -25)]
     stretch = benchmark_df[benchmark_df["Score Gap %"] < -25]
 
-    elements.append(Paragraph("University Fit Overview", styles['Heading2']))
-    add_university_section(reach, "Within Reach Universities")
-    add_university_section(maybe, "Needs Strengthening")
-    add_university_section(stretch, "Significant Gaps")
+    create_fit_section(reach, "✅ Within Reach Universities", colors.darkgreen)
+    create_fit_section(maybe, "🟡 Target / Needs Strengthening", colors.orange)
+    create_fit_section(stretch, "🔴 Significant Gap Universities", colors.crimson)
 
     doc.build(elements)
     buffer.seek(0)
     return buffer
 
 # ─────────────────────────────────────────────
-# MULTI-PAGE STATE HANDLING
+# 4. MULTI-PAGE NAVIGATION
 # ─────────────────────────────────────────────
 if 'page' not in st.session_state:
     st.session_state.page = 'intro'
 
+# --- PAGE 1: INTRO ---
 if st.session_state.page == 'intro':
     try:
-        col1, col2 = st.columns([0.2, 0.8])
-        with col1:
-            st.image("Uppseekers Logo.png", width=100)
-        with col2:
-            st.title("Uppseekers Admit AI")
-    except Exception:
-        st.title("Uppseekers Admit AI")
-        
+        st.image("Uppseekers Logo.png", width=180)
+    except:
+        pass
+    st.title("Uppseekers Admit AI")
+    st.write("Welcome! Let's assess your profile readiness for global universities.")
+    
     name = st.text_input("Student Name")
     student_class = st.selectbox("Student Class", ["9", "10", "11", "12"])
-    board = st.selectbox("Board of Education", ["IB", "IGCSE", "CIE", "ICSE", "CBSE", "State Board", "Others"])
     school_name = st.text_input("School Name")
-    city = st.selectbox("City", sorted(["Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur", "Lucknow", "Other"]))
-
+    city = st.text_input("City")
+    
     xls, sheet_map = load_data()
     selected_course = st.selectbox("Interested Course for Undergrad", list(sheet_map.keys()))
 
-    if st.button("Next"):
-        if name and student_class and selected_course:
-            st.session_state.page = 'questions'
-            st.session_state.name = name
-            st.session_state.student_class = student_class
-            st.session_state.selected_course = selected_course
-            st.session_state.sheet_map = sheet_map
+    if st.button("Start Assessment"):
+        if name and school_name and city:
+            st.session_state.update({
+                "name": name,
+                "student_class": student_class,
+                "selected_course": selected_course,
+                "sheet_map": sheet_map,
+                "page": 'questions'
+            })
             st.rerun()
+        else:
+            st.warning("Please fill in all the details to proceed.")
 
+# --- PAGE 2: QUESTIONS ---
 elif st.session_state.page == 'questions':
-    selected_course = st.session_state.selected_course
-    sheet_map = st.session_state.sheet_map
-    sheet_name = sheet_map[selected_course]
     xls, _ = load_data()
+    course = st.session_state.selected_course
+    sheet_name = st.session_state.sheet_map[course]
     questions_df = xls.parse(sheet_name)
 
-    st.markdown(f"### Answer Questions for {selected_course}")
+    st.subheader(f"Profiling: {course}")
     total_score = 0
     response_summary = []
 
-    for _, row in questions_df.iterrows():
+    # Display Questions
+    for idx, row in questions_df.iterrows():
         st.markdown(f"**Q{int(row['question_id'])}. {row['question_text']}**")
-        options = []
-        option_map = {}
-        for opt in ['A', 'B', 'C', 'D', 'E']:
-            opt_text = row.get(f'option_{opt}')
+        
+        # Build options dynamically
+        opts = []
+        val_map = {}
+        for char in 'ABCDE':
+            opt_text = row.get(f'option_{char}')
             if pd.notna(opt_text):
-                label = f"{opt}) {opt_text.strip()}"
-                options.append(label)
-                option_map[label] = row.get(f'score_{opt}')
+                label = f"{char}) {str(opt_text).strip()}"
+                opts.append(label)
+                val_map[label] = row.get(f'score_{char}', 0)
         
-        selected = st.selectbox("Select your answer", ["Select..."] + options, key=f"q{row['question_id']}")
-        if selected != "Select...":
-            score = option_map.get(selected, 0)
-            total_score += score
-            response_summary.append((row['question_text'], selected, score))
+        choice = st.selectbox("Your Answer", ["Select an option..."] + opts, key=f"q_{idx}")
+        
+        if choice != "Select an option...":
+            sc = val_map[choice]
+            total_score += sc
+            response_summary.append((row['question_text'], choice, sc))
 
-    if st.button("Calculate Results"):
-        bxls, bsheet_map = load_benchmarking()
-        bsheet = bsheet_map.get(selected_course)
-        benchmark_df = pd.DataFrame()
-        
-        if bsheet and bsheet in bxls.sheet_names:
-            bench_df = bxls.parse(bsheet)
+    if st.button("Complete Assessment"):
+        if len(response_summary) < len(questions_df):
+            st.error("Please answer all questions before submitting.")
+        else:
+            # Load and Process Benchmarks
+            bxls, bsheet_map = load_benchmarking()
+            bsheet = bsheet_map.get(course)
             
-            # THE FIX: Directly use the raw 'Total Benchmark Score' from Excel
-            # This ensures student raw score is compared to university raw score.
-            if "Total Benchmark Score" in bench_df.columns:
+            if bsheet and bsheet in bxls.sheet_names:
+                bench_df = bxls.parse(bsheet)
+                # Benchmark logic fix: Use raw scores from the sheet (e.g. 95.9, etc)
+                # Ensure we are comparing raw sum to raw sum
                 bench_df["Score Gap %"] = ((total_score - bench_df["Total Benchmark Score"]) / bench_df["Total Benchmark Score"]) * 100
-                benchmark_df = bench_df
+                
+                st.session_state.update({
+                    "total_score": total_score,
+                    "response_summary": response_summary,
+                    "benchmark_df": bench_df,
+                    "page": 'parent_info'
+                })
+                st.rerun()
+            else:
+                st.error("Benchmarking data for this course is missing.")
 
-        st.session_state.total_score = total_score
-        st.session_state.response_summary = response_summary
-        st.session_state.benchmark_df = benchmark_df
-        st.session_state.page = 'parent_info'
-        st.rerun()
-
+# --- PAGE 3: PARENT & COUNSELLOR SECURITY ---
 elif st.session_state.page == 'parent_info':
-    st.title("📞 Final Steps")
+    st.title("Finalize Your Report")
+    
+    st.subheader("Parent Details")
     parent_name = st.text_input("Parent's Name")
     whatsapp = st.text_input("WhatsApp Number (+91...)")
+    budget = st.selectbox("Estimated Annual Budget", ["< 15 Lacs", "15-30 Lacs", "> 30 Lacs"])
+    
+    st.divider()
+    st.subheader("Counsellor Authorization")
+    st.info("The section below is for office use only.")
+    counsellor_name = st.text_input("Counsellor Name")
+    access_code = st.text_input("Access Code", type="password")
 
-    if st.button("Generate Report"):
-        if parent_name and whatsapp:
-            st.success("✅ Profile Analysis Complete!")
-            pdf_data = generate_pdf_with_benchmark(
+    if st.button("Generate Admit AI Report"):
+        if not (parent_name and whatsapp and counsellor_name):
+            st.error("All fields (Parent and Counsellor) are required.")
+        elif access_code != "#304":
+            st.error("Invalid Access Code. Please contact the administrator.")
+        else:
+            # Code is correct, generate PDF
+            st.success("Authorization Successful!")
+            pdf_data = generate_pdf_report(
                 st.session_state.name,
                 st.session_state.student_class,
                 st.session_state.selected_course,
                 st.session_state.total_score,
                 st.session_state.response_summary,
-                st.session_state.benchmark_df
+                st.session_state.benchmark_df,
+                counsellor_name
             )
+            
             st.download_button(
-                label="Download Your Report",
+                label="📥 Download Detailed Report (PDF)",
                 data=pdf_data,
-                file_name=f"{st.session_state.name}_AdmitAI_Report.pdf",
+                file_name=f"{st.session_state.name}_Uppseekers_Report.pdf",
                 mime="application/pdf"
             )
